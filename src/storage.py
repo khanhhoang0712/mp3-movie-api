@@ -38,3 +38,26 @@ class MovieStorage:
             raise
         finally:
             connection.close()
+
+    def get(self):
+        connection = get_connection(self.db_path)
+        try:
+            cursor = connection.execute(
+                "SELECT title, release_year, rating, genre FROM movies ORDER BY id"
+            )
+            rows = cursor.fetchall()
+            records = []
+            for row in rows:
+                records.append(dict(row))
+            return pd.DataFrame(records, columns=MOVIE_COLUMNS)
+        finally:
+            connection.close()
+
+    def count_movies(self):
+        connection = get_connection(self.db_path)
+        try:
+            cursor = connection.execute("SELECT COUNT(*) FROM movies")
+            row = cursor.fetchone()
+            return row[0]
+        finally:
+            connection.close()
