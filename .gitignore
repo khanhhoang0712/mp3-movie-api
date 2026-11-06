@@ -1,0 +1,15 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache / generated files
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS / editor files
+.DS_Store
+.vscode/
+
+# SQLite database 
+data/
