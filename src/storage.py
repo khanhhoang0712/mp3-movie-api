@@ -61,3 +61,61 @@ class MovieStorage:
             return row[0]
         finally:
             connection.close()
+
+    def select_columns(self, columns, limit=5):
+        if not columns:
+            logger.error("Select at least one column")
+            raise ValueError("Select at least one column")
+
+        for column in columns:
+            if column not in MOVIE_COLUMNS:
+                logger.error(f"Unsupported column: {column}")
+                raise ValueError(f"Unsupported column: {column}")
+
+        selected_columns = ", ".join(["id"] + columns)
+        connection = get_connection(self.db_path)
+        try:
+            sql = f"SELECT {selected_columns} FROM movies ORDER BY id LIMIT ?"
+            cursor = connection.execute(sql, [limit])
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append(dict(row))
+
+            logger.debug(f"Selected movies: columns={columns}, rows={len(results)}")
+            return results
+        finally:
+            connection.close()
+
+    def query_movies(self, columns, min_rating, limit):
+        if not columns:
+            logger.error("Select at least one column")
+            raise ValueError("Select at least one column")
+
+        for column in columns:
+            if column not in MOVIE_COLUMNS:
+                logger.error(f"Unsupported column: {column}")
+                raise ValueError(f"Unsupported column: {column}")
+
+        selected_columns = ", ".join(["id"] + columns)
+        connection = get_connection(self.db_path)
+        try:
+            sql = f"""
+                SELECT {selected_columns}
+                FROM movies
+                WHERE rating >= ?
+                ORDER BY rating DESC, id ASC
+                LIMIT ?
+            """
+            cursor = connection.execute(sql, [min_rating, limit])
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append(dict(row))
+
+            logger.debug(f"Queried movies: columns={columns}, rows={len(results)}")
+            return results
+        finally:
+            connection.close()
