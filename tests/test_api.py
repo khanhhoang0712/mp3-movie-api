@@ -1,43 +1,79 @@
 def test_upload_csv(client, sample_csv_bytes):
     response = client.post(
         "/upload",
-        files={"file": ("sample_data.csv", sample_csv_bytes, "text/csv")},
+        files={"file": ("sample_movies.csv", sample_csv_bytes, "text/csv")},
     )
     assert response.status_code == 200
+    assert response.json() == {
+        "filename": "sample_movies.csv",
+        "rows": 20,
+        "columns": 4,
+        "column_names": ["title", "release_year", "rating", "genre"],
+    }
 
-    body = response.json()
-    assert body["rows"] == 6
-    assert body["columns"] == 2
-    assert isinstance(body["id"], int)
-    assert body["id"] > 0
+
+def test_get_movies_with_limit(client, uploaded_movies):
+    response = client.get("/movies?limit=2")
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": [
+            {"id": 1, "title": "Movie A", "release_year": 2020, "rating": 8.0, "genre": "Drama"},
+            {"id": 2, "title": "Movie B", "release_year": 2021, "rating": 8.5, "genre": "Comedy"},
+        ],
+        "total_rows": 20,
+    }
 
 
-def test_process_and_retrieve(client, uploaded_dataset_id, processing_body):
-    # Process the uploaded dataset
+def test_get_movies_when_empty(client):
+    response = client.get("/movies")
+    assert response.status_code == 200
+    assert response.json() == {"data": [], "total_rows": 0}
+
+
+def test_search_movies(client, uploaded_movies):
+    response = client.get("/movies/search?min_rating=8.5&limit=2")
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": 4, "title": "Movie C"},
+        {"id": 2, "title": "Movie B"},
+    ]
+
+    response = client.get("/movies/search?columns=title&columns=rating&min_rating=8.5&limit=2")
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": 4, "title": "Movie C", "rating": 9.0},
+        {"id": 2, "title": "Movie B", "rating": 8.5},
+    ]
+
+
+def test_search_unsupported_column(client, uploaded_movies):
+    response = client.get("/movies/search?columns=budget")
+    assert response.status_code == 400
+
+
+def test_upload_again_replaces_collection(client, uploaded_movies, sample_csv_bytes):
+    client.post(
+        "/upload",
+        files={"file": ("sample_movies.csv", sample_csv_bytes, "text/csv")},
+    )
+    response = client.get("/movies")
+    assert response.json()["total_rows"] == 20
+
+
+def test_unsupported_file_extension(client):
     response = client.post(
-        f"/datasets/{uploaded_dataset_id}/process",
-        json=processing_body,
+        "/upload",
+        files={"file": ("movies.txt", b"hello", "text/plain")},
     )
+    assert response.status_code == 400
+    response = client.get("/health")
     assert response.status_code == 200
 
-    body = response.json()
-    assert body["validation_rows_removed"] == 1
-    assert body["cleaning_report"]["rows_before"] == 5
-    assert body["cleaning_report"]["rows_after"] == 3
 
-    # Retrieve the processed dataset
-    response = client.get(f"/datasets/{uploaded_dataset_id}")
+def test_process_movies(client, uploaded_movies, processing_body):
+    response = client.post("/movies/process", json=processing_body)
     assert response.status_code == 200
 
-    body = response.json()
-    assert body["total_rows"] == 3
-
-    student_ids = [row["student_id"] for row in body["data"]]
-    scores = [row["score"] for row in body["data"]]
-    assert student_ids == [1, 2, 5]
-    assert scores == [80, 90, 85]
-
-
-def test_retrieve_missing_dataset(client):
-    response = client.get("/datasets/999")
-    assert response.status_code == 404
+    rows_after = response.json()["cleaning_report"]["rows_after"]
+    response = client.get("/movies")
+    assert response.json()["total_rows"] == rows_after
