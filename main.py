@@ -7,6 +7,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 
 from data_pipeline import create_cleaning_report, process_data, validate_dataframe
 from src import (
+    MovieCache,
     MovieStorage,
     MovieUploadInfo,
     MovieDataResponse,
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Data Processing API", version="1.0.0")
 app.middleware("http")(log_requests)
 storage = MovieStorage()
+cache = MovieCache()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -40,8 +42,6 @@ async def upload_movies(file: UploadFile = File(...)):
             status_code=400,
             detail=f"Unsupported file format '{suffix}'. Please upload a .csv file.",
         )
-
-    # 2. Read the file and turn it into a DataFrame
     contents = await file.read()
     try:
         df = pd.read_csv(io.BytesIO(contents))
@@ -63,21 +63,16 @@ async def upload_movies(file: UploadFile = File(...)):
             detail="Could not read the file as text. Save it as a UTF-8 CSV and try again.",
         ) from e
 
-    # 3. The CSV must have exactly the 4 movie columns (in any order)
     if sorted(df.columns) != sorted(MOVIE_COLUMNS):
         logger.warning(f"Wrong columns in {file.filename}: {list(df.columns)}")
         raise HTTPException(
             status_code=400,
             detail=f"The CSV must have exactly these columns: {MOVIE_COLUMNS}",
         )
-
-    # 4. The CSV must have at least one movie
     if df.empty:
         logger.warning(f"No data rows in {file.filename}")
         raise HTTPException(status_code=400, detail="The CSV has no data rows.")
     df = df[MOVIE_COLUMNS]
-
-    # 5. Replace the stored collection with this upload
     storage.save(df)
     logger.info(f"Uploaded movies: filename={file.filename}, rows={len(df)}")
 
@@ -92,11 +87,18 @@ async def upload_movies(file: UploadFile = File(...)):
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
     """Return up to limit movies and the total number stored."""
+    cached_response = cache.get(limit)
+    if cached_response is not None:
+        logger.info(f"Cache hit: returning saved movies for limit={limit}")
+        return cached_response
+
     data = storage.select_columns(MOVIE_COLUMNS, limit)
     total_rows = storage.count_movies()
+    response = {"data": data, "total_rows": total_rows}
+    cache.set(limit, response)
 
     logger.info(f"Retrieved movies: returned_rows={len(data)}, total_rows={total_rows}")
-    return {"data": data, "total_rows": total_rows}
+    return response
 
 
 @app.get("/movies/search", response_model=list[dict])
@@ -121,41 +123,30 @@ def query_movies(
 @app.post("/movies/process", response_model=MovieProcessingReport)
 def process_movies(config: ProcessConfig):
     """Validate and clean the stored movies using MP1 functions."""
-    # 1. Get the stored movies (400 if there are none)
     df = storage.get()
     if df.empty:
         logger.warning("No movies to process")
         raise HTTPException(status_code=400, detail="No movies stored. Upload a CSV first.")
-
-    # 2. Turn the settings into a normal dictionary
     config_dict = config.model_dump()
     required_columns = config_dict["validation"]["required_columns"]
     numeric_columns = config_dict["validation"]["numeric_columns"]
 
-    # 3. Every numeric column must exist in the data
     for col in numeric_columns:
         if col not in df.columns:
             logger.warning(f"Numeric column not found: {col}")
             raise HTTPException(status_code=400, detail=f"Numeric column not found: {col}")
 
     try:
-        # 4. Validate
         validated_df = validate_dataframe(df, required_columns, numeric_columns)
-
-        # 5. Count rows removed by validation, and save a copy for the report
         validation_rows_removed = len(df) - len(validated_df)
         df_before = validated_df.copy()
-
-        # 6. Process
         processed_df = process_data(validated_df, config_dict)
+
     except ValueError as error:
         logger.warning(f"Processing failed: {error}")
         raise HTTPException(status_code=400, detail=str(error)) from error
-
-    # 7. Compare before vs after processing
     cleaning_report = create_cleaning_report(df_before, processed_df)
 
-    # 8. Replace the stored movies with the processed ones
     storage.save(processed_df)
 
     logger.info(
@@ -163,8 +154,6 @@ def process_movies(config: ProcessConfig):
         f"rows_before={cleaning_report['rows_before']}, "
         f"rows_after={cleaning_report['rows_after']}"
     )
-
-    # 9. Return the report (no dataset ID anymore)
     return {
         "validation_rows_removed": validation_rows_removed,
         "cleaning_report": cleaning_report,
