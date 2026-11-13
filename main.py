@@ -74,6 +74,7 @@ async def upload_movies(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="The CSV has no data rows.")
     df = df[MOVIE_COLUMNS]
     storage.save(df)
+    cache.invalidate()
     logger.info(f"Uploaded movies: filename={file.filename}, rows={len(df)}")
 
     return MovieUploadInfo(
@@ -148,6 +149,7 @@ def process_movies(config: ProcessConfig):
     cleaning_report = create_cleaning_report(df_before, processed_df)
 
     storage.save(processed_df)
+    cache.invalidate()
 
     logger.info(
         f"Processed movies: validation_removed={validation_rows_removed}, "
